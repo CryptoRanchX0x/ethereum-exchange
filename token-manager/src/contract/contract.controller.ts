@@ -6,17 +6,6 @@ import { loadAbi } from 'src/utils/abi-loader';
 export class ContractController {
   constructor(private readonly contractService: ContractService) { }
 
-  @Get('balance')
-  async getBalance(
-    @Query('address') address: string,
-    @Query('contract_address') contract_address: string,
-  ) {
-    const abi = loadAbi(contract_address);
-
-    const balance = await this.contractService.getBalance(abi, contract_address, address);
-    return { address, balance, contract: contract_address };
-  }
-
   @Post('mint')
   async mint(@Body() body: any) {
     const { contract_address, amount } = body;

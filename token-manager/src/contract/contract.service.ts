@@ -24,13 +24,6 @@ export class ContractService {
     return new ethers.Wallet(privateKey, this.provider);
   }
 
-  async getBalance(abi: any, contractAddress: string, address: string): Promise<string> {
-    const contract = getContract(contractAddress, abi, this.provider);
-    const decimals: number = await contract.decimals();
-    const balance: ethers.BigNumberish = await contract.balanceOf(address);
-    return ethers.formatUnits(balance, decimals);
-  }
-
   async mint(abi: any, contractAddress: string, amount: string): Promise<string> {
     try {
       const contract = getContract(contractAddress, abi, this.getSigner());
