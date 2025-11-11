@@ -23,10 +23,5 @@ export async function loadAbi(contractName: string): Promise<any> {
  * @param abi ABI do contrato
  * @param signerOrProvider Pode ser um Signer (para transações) ou Provider (apenas leitura)
  */
-export function getContract(
-  contractAddress: string,
-  abi: any,
-  signerOrProvider: ethers.Signer | ethers.Provider
-): ethers.Contract {
-  return new ethers.Contract(contractAddress, abi, signerOrProvider);
-}
+// `getContract` has been migrated to `ContractService`.
+// Keep this file focused on ABI loading only.

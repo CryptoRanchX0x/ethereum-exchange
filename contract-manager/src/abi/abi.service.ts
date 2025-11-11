@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { DynamoDBClient, DynamoDBClientConfig } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, ScanCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -84,6 +84,28 @@ export class AbiService {
         } catch (err) {
             console.error('Erro ao buscar ABIs:', err);
             throw new InternalServerErrorException('Erro ao buscar ABIs no DynamoDB');
+        }
+    }
+
+    async getAbiById(id: string) {
+        try {
+            const response = await this.client.send(new GetCommand({
+                TableName: this.tableName,
+                Key: { id },
+            }));
+
+            const item = (response as any).Item;
+            if (!item) return null;
+
+            return {
+                id: item.id,
+                contractName: item.contractName,
+                createdAt: item.createdAt,
+                abi: typeof item.abi === 'string' ? JSON.parse(item.abi) : item.abi,
+            };
+        } catch (err) {
+            console.error('Erro ao buscar ABI por id:', err);
+            throw new InternalServerErrorException('Erro ao buscar ABI no DynamoDB');
         }
     }
 }

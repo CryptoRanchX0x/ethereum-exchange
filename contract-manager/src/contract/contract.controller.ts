@@ -6,20 +6,18 @@ import { loadAbi } from 'src/utils/abi-loader';
 export class ContractController {
   constructor(private readonly contractService: ContractService) { }
 
-  @Post('call-function')
+  @Post('call-function-read')
   async callFunction(@Body() body: any) {
-    const { contract_address, function_name, parameters = [] } = body;
-
-    const abi = await loadAbi(contract_address);
+    const { contract_name, contract_address, function_name, parameters = [] } = body;
 
     const result = await this.contractService.callFunction(
-      abi.abi,
+      contract_name,
       contract_address,
       function_name,
       parameters,
     );
 
-    return { contract: contract_address, function: function_name, result };
+    return { contract: contract_name, function: function_name, result: result.toString() };
   }
 
   /**
