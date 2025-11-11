@@ -1,4 +1,4 @@
-import { ethers } from 'ethers';
+import { ethers, id } from 'ethers';
 import { AbiService } from '../abi/abi.service';
 
 /**
@@ -12,7 +12,7 @@ export async function loadAbi(contractName: string): Promise<any> {
   if (items && items.length > 0) {
     const first = items[0] as any;
     const abi = typeof first.abi === 'string' ? JSON.parse(first.abi) : first.abi;
-    return abi;
+    return {id: first.id, abi};
   }
 }
 

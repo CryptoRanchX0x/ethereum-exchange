@@ -72,7 +72,15 @@ export class AbiService {
             }
 
             const response = await this.client.send(new ScanCommand(params));
-            return response.Items || [];
+            const items = response.Items || [];
+
+            // Mapear items para o formato esperado
+            return items.map((item: any) => ({
+                id: item.id,
+                contractName: item.contractName,
+                createdAt: item.createdAt,
+                abi: typeof item.abi === 'string' ? JSON.parse(item.abi) : item.abi,
+            }));
         } catch (err) {
             console.error('Erro ao buscar ABIs:', err);
             throw new InternalServerErrorException('Erro ao buscar ABIs no DynamoDB');
