@@ -1,24 +1,19 @@
-import * as fs from 'fs';
 import { ethers } from 'ethers';
-import * as path from 'path';
+import { AbiService } from '../abi/abi.service';
 
-export function loadAbi(contractAddress: string): any {
-  // normaliza endereço para minúsculo
-  const normalizedAddress = contractAddress;
+/**
+ * @param contractName Endereço ou nome do contrato
+ */
+export async function loadAbi(contractName: string): Promise<any> {
 
-  // constrói o caminho do arquivo JSON
-  const abiPath = path.resolve(
-    __dirname,
-    `../../src/abi/contract-${normalizedAddress}.json`,
-  );
+  const abiService = new AbiService();
+  const items = await abiService.getAbis(contractName);
 
-  if (!fs.existsSync(abiPath)) {
-    throw new Error(`ABI file not found for contract: ${contractAddress}`);
+  if (items && items.length > 0) {
+    const first = items[0] as any;
+    const abi = typeof first.abi === 'string' ? JSON.parse(first.abi) : first.abi;
+    return abi;
   }
-
-  // lê e retorna o conteúdo JSON
-  const abi = JSON.parse(fs.readFileSync(abiPath, 'utf8'));
-  return abi;
 }
 
 /**

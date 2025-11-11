@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  localstack:
+    container_name: localstack
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"    # Porta principal para todos os serviços
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=s3,dynamodb,kms
+      - DEBUG=1
+      - DATA_DIR=/var/lib/localstack/data
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      # - "./localstack_data:/var/lib/localstack/data"   # comente ou remova esta linha
+      - "/var/run/docker.sock:/var/run/docker.sock"

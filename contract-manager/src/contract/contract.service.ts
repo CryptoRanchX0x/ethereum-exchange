@@ -24,31 +24,6 @@ export class ContractService {
     return new ethers.Wallet(privateKey, this.provider);
   }
 
-  async mint(abi: any, contractAddress: string, amount: string): Promise<string> {
-    try {
-      const contract = getContract(contractAddress, abi, this.getSigner());
-      const decimals: number = await contract.decimals();
-      const tx = await contract.mint(ethers.parseUnits(amount, decimals));
-      await tx.wait();
-      return tx.hash;
-    } catch (error) {
-      throw new BadRequestException(`Error minting tokens: ${error.message}`);
-    }
-
-  }
-
-  async burn(abi: any, contractAddress: string, amount: string): Promise<string> {
-    try {
-      const contract = getContract(contractAddress, abi, this.getSigner());
-      const decimals: number = await contract.decimals();
-      const tx = await contract.burn(ethers.parseUnits(amount, decimals));
-      await tx.wait();
-      return tx.hash;
-    } catch (error) {
-      throw new BadRequestException(`Error burning tokens: ${error.message}`);
-    }
-  }
-
   async callFunction(
     abi: any,
     contractAddress: string,
