@@ -15,8 +15,8 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
     volumes:
-      # - "./localstack_data:/var/lib/localstack/data"   # comente ou remova esta linha
       - "/var/run/docker.sock:/var/run/docker.sock"
+      - ./localstack-init:/etc/localstack/init/ready.d:ro
 
   mysql:
     container_name: mysql_db
@@ -31,6 +31,7 @@ services:
       MYSQL_PASSWORD: app_password
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./src/database/migrations/001_create_smart_contract_table.sql:/docker-entrypoint-initdb.d/001_create_smart_contract_table.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
