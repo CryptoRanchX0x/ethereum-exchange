@@ -31,9 +31,10 @@ npm install
 
 Crie um arquivo `.env` na raiz do projeto:
 
+### Modo 1: Com Private Key (Tradicional)
 ```env
-# Ethereum
-SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/YOUR_PROJECT_ID
+# Ethereum Network
+RPC_URL=https://sepolia.infura.io/v3/YOUR_PROJECT_ID
 PRIVATE_KEY=0xYOUR_PRIVATE_KEY
 
 # DynamoDB (LocalStack)
@@ -47,9 +48,96 @@ DYNAMODB_TABLE_ABI=smart-contract-abis
 DB_HOST=localhost
 DB_PORT=3306
 DB_USERNAME=root
-DB_PASSWORD=root123
-DB_DATABASE=contract_manager
+DB_PASSWORD=root
+DB_DATABASE=ethereum_exchange
 ```
+
+### Modo 2: Com AWS KMS (Recomendado para Produção) 🔐
+```env
+# Ethereum Network
+RPC_URL=https://sepolia.infura.io/v3/YOUR_PROJECT_ID
+
+# AWS KMS (remove PRIVATE_KEY quando usar KMS)
+KMS_KEY_ID=your-kms-key-id-or-alias
+AWS_ENDPOINT=http://localhost:4566  # Apenas para LocalStack, remover em produção
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=test              # Para LocalStack
+AWS_SECRET_ACCESS_KEY=test          # Para LocalStack
+
+# DynamoDB (LocalStack)
+DYNAMODB_ENDPOINT=http://localhost:4566
+DYNAMODB_TABLE_ABI=smart-contract-abis
+
+# MySQL
+DB_HOST=localhost
+DB_PORT=3306
+DB_USERNAME=root
+DB_PASSWORD=root
+DB_DATABASE=ethereum_exchange
+```
+
+### 📋 Variáveis de Ambiente
+
+#### Ethereum Network
+- **`RPC_URL`** (obrigatório): URL do provedor Ethereum (Infura, Alchemy, ou node próprio)
+  - Exemplo Sepolia: `https://sepolia.infura.io/v3/YOUR_PROJECT_ID`
+  - Exemplo Mainnet: `https://mainnet.infura.io/v3/YOUR_PROJECT_ID`
+
+#### Assinatura de Transações (escolha um dos métodos)
+- **`PRIVATE_KEY`** (opcional): Chave privada em formato hexadecimal com prefixo `0x`
+  - Usado para assinatura tradicional (não recomendado para produção)
+  - Não use junto com KMS_KEY_ID
+  
+- **`KMS_KEY_ID`** (opcional): ID ou alias da chave no AWS KMS
+  - Usado para assinatura segura via AWS KMS (recomendado)
+  - Exemplo: `arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012`
+  - Ou alias: `alias/ethereum-signer`
+
+#### AWS KMS (se usar KMS_KEY_ID)
+- **`AWS_ENDPOINT`** (opcional): Endpoint customizado do AWS
+  - Apenas para LocalStack em desenvolvimento: `http://localhost:4566`
+  - Remover em produção para usar AWS real
+  
+- **`AWS_REGION`** (obrigatório se usar KMS): Região AWS
+  - Exemplo: `us-east-1`, `eu-west-1`
+  
+- **`AWS_ACCESS_KEY_ID`** (obrigatório se usar KMS): Credencial de acesso AWS
+  - Em LocalStack: `test`
+  - Em produção: use IAM roles ou credenciais reais
+  
+- **`AWS_SECRET_ACCESS_KEY`** (obrigatório se usar KMS): Credencial secreta AWS
+  - Em LocalStack: `test`
+  - Em produção: use IAM roles ou credenciais reais
+
+#### DynamoDB
+- **`DYNAMODB_ENDPOINT`** (opcional): Endpoint customizado do DynamoDB
+  - Para LocalStack: `http://localhost:4566`
+  - Remover em produção para usar DynamoDB real
+  
+- **`DYNAMODB_TABLE_ABI`** (obrigatório): Nome da tabela para armazenar ABIs
+  - Padrão: `smart-contract-abis`
+  
+- **`AWS_REGION`** (obrigatório): Região AWS para DynamoDB
+  - Exemplo: `us-east-1`
+
+#### MySQL
+- **`DB_HOST`** (obrigatório): Host do servidor MySQL
+  - Desenvolvimento: `localhost`
+  - Produção: IP ou domínio do servidor
+  
+- **`DB_PORT`** (obrigatório): Porta do MySQL
+  - Padrão: `3306`
+  
+- **`DB_USERNAME`** (obrigatório): Usuário do banco
+  - Desenvolvimento: `root`
+  - Produção: usuário com permissões específicas
+  
+- **`DB_PASSWORD`** (obrigatório): Senha do banco
+  
+- **`DB_DATABASE`** (obrigatório): Nome do banco de dados
+  - Padrão: `ethereum_exchange`
+
+> 📖 **Veja [KMS_SETUP.md](./KMS_SETUP.md) para instruções detalhadas de configuração do AWS KMS**
 
 ## 🐳 Iniciar Infraestrutura
 
@@ -414,12 +502,183 @@ npx hardhat run scripts/deploy.ts --network localhost
 
 ---
 
+## 📂 Arquitetura e Arquivos Principais
+
+### Regras de Negócio
+
+#### 📄 `src/contract/contract.service.ts`
+**Responsabilidade:** Lógica central de contratos inteligentes
+
+**Principais métodos:**
+- `deployContract()` - Faz deploy de contratos na blockchain
+  - Carrega ABI e bytecode do DynamoDB
+  - Prepara transação de deployment
+  - Assina via KMS ou private key
+  - Salva contrato no MySQL com endereço e tx_hash
+  
+- `callFunctionRead()` - Executa funções view/pure (leitura)
+  - Não gasta gas
+  - Não cria transações
+  - Retorna resultado imediatamente
+  
+- `callFunctionWrite()` - Executa funções que modificam estado
+  - Gasta gas
+  - Cria e assina transação
+  - Registra transação no MySQL
+  - Retorna tx_hash para acompanhamento
+  
+- `signAndBroadcastTransaction()` - Método privado centralizado
+  - Preenche nonce, chainId, fee data
+  - Estima gas (apenas para deploy)
+  - Assina transação via KmsSigner
+  - Faz broadcast na rede
+
+**Dependências:**
+- `KmsService` - Para assinatura de transações
+- `SmartContractRepository` - Persistência de contratos
+- `TransactionRepository` - Rastreamento de transações
+- `AbiService` - Recuperação de ABIs do DynamoDB
+
+---
+
+#### 📄 `src/kms/kms.service.ts`
+**Responsabilidade:** Integração com AWS KMS para assinatura criptográfica
+
+**Principais métodos:**
+- `getAddress()` - Deriva endereço Ethereum da chave pública KMS
+  - Usa Keccak256 para gerar endereço
+  - Cacheia resultado
+  
+- `getPublicKey()` - Obtém chave pública da KMS
+  - Formato DER comprimido
+  - Converte para formato Ethereum (64 bytes x,y)
+  
+- `signHash(messageHash)` - Assina hash de 32 bytes
+  - Usa algoritmo ECDSA_SHA_256
+  - Retorna assinatura r,s,v no formato Ethereum
+  
+- `signTransaction(transaction)` - Assina transação completa
+  - Cria objeto Transaction do ethers
+  - Calcula hash da transação
+  - Assina via KMS
+  - Serializa transação assinada
+  
+- `parseDERSignature(derSignature)` - Converte DER para r,s
+  - Normaliza valor S (low-s requirement)
+  - Garante compatibilidade com Ethereum
+  
+- `calculateRecoveryId(messageHash, signature)` - Calcula v (recovery ID)
+  - Tenta v=27 e v=28
+  - Verifica qual recupera o endereço correto
+
+**Detalhes Técnicos:**
+- Usa curva secp256k1 (padrão Ethereum)
+- Normalização S-value obrigatória: `S ≤ secp256k1N / 2`
+- Recovery ID permite recuperar chave pública da assinatura
+
+---
+
+#### 📄 `src/utils/getSigner.ts`
+**Responsabilidade:** Abstração de assinatura de transações
+
+**Classes:**
+- `KmsSigner extends ethers.AbstractSigner`
+  - Implementa interface do ethers.js
+  - Delega assinatura para KmsService
+  - Suporta signTransaction, signMessage, signTypedData
+  
+**Funções:**
+- `getSigner(kmsService, provider)` - Factory pattern
+  - Retorna KmsSigner se KMS_KEY_ID configurado
+  - Fallback para Wallet com PRIVATE_KEY
+  - Garante sempre ter um signer válido
+
+**Princípio:** Responsabilidade única - apenas assina, não prepara transações
+
+---
+
+#### 📄 `src/abi/abi.service.ts`
+**Responsabilidade:** Gerenciamento de ABIs no DynamoDB
+
+**Principais métodos:**
+- `saveAbi(contractName, abi)` - Salva ABI com ID único
+- `getAbiById(id)` - Recupera ABI por ID
+- `listAbis(contractName?)` - Lista ABIs com filtro opcional
+- `deleteAbi(id)` - Remove ABI
+
+**Estrutura dos dados:**
+```typescript
+{
+  id: string,           // UUID
+  contractName: string, // Nome do contrato
+  abi: any[],          // Array da ABI
+  bytecode?: string,   // Bytecode (opcional)
+  createdAt: string    // Timestamp ISO
+}
+```
+
+---
+
+#### 📄 `src/utils/abi-loader.ts`
+**Responsabilidade:** Parse e validação de arquivos ABI
+
+**Principais funções:**
+- `parseAbiFromBuffer(buffer)` - Extrai ABI e bytecode
+  - Suporta formato Hardhat (artifacts)
+  - Suporta formato solc padrão
+  - Valida estrutura do JSON
+  
+**Formato aceito:**
+```json
+{
+  "contractName": "Token",
+  "abi": [...],
+  "bytecode": "0x..."
+}
+```
+
+---
+
+### Fluxo de Dados
+
+#### Deploy de Contrato
+```
+1. Cliente → POST /contract/deploy
+2. ContractService.deployContract()
+3. AbiService.getAbiById() → DynamoDB
+4. ContractFactory.getDeployTransaction() → ethers.js
+5. ContractService.signAndBroadcastTransaction()
+6. KmsSigner.signTransaction() → KmsService
+7. KmsService.signHash() → AWS KMS
+8. Provider.broadcastTransaction() → Blockchain
+9. SmartContractRepository.save() → MySQL
+10. TransactionRepository.save() → MySQL
+```
+
+#### Chamada de Função (Write)
+```
+1. Cliente → POST /contract/call-function-write
+2. ContractService.callFunctionWrite()
+3. SmartContractRepository.findOne() → MySQL (busca contrato)
+4. AbiService.getAbiById() → DynamoDB (busca ABI)
+5. Contract.interface.encodeFunctionData() → ethers.js
+6. ContractService.signAndBroadcastTransaction()
+7. KmsSigner.signTransaction() → KmsService
+8. Provider.broadcastTransaction() → Blockchain
+9. TransactionRepository.save() → MySQL
+```
+
+---
+
 ## 📝 Notas
 
 - As transações de escrita são rastreadas na tabela `transactions` com status
 - Funções `view`/`pure` não gastam gas e não criam transações
 - ABIs são armazenadas no DynamoDB para escalabilidade
 - Contratos deployados são salvos no MySQL com relação ao ABI
-- Use a rede Sepolia para testes (configure SEPOLIA_RPC_URL)
+- Use a rede Sepolia para testes (configure RPC_URL)
+- AWS KMS garante que chaves privadas nunca saem do HSM
+- LocalStack simula KMS localmente para desenvolvimento
+- S-normalization é crítica para compatibilidade Ethereum
 
 ---

@@ -8,7 +8,7 @@ services:
       - "4566:4566"    # Porta principal para todos os serviços
       - "4510-4559:4510-4559"
     environment:
-      - SERVICES=s3,dynamodb,kms
+      - SERVICES=dynamodb,kms
       - DEBUG=1
       - DATA_DIR=/var/lib/localstack/data
       - AWS_DEFAULT_REGION=us-east-1
@@ -17,6 +17,7 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - ./localstack-init:/etc/localstack/init/ready.d:ro
+      - localstack_data:/var/lib/localstack
 
   mysql:
     container_name: mysql_db
@@ -31,9 +32,14 @@ services:
       MYSQL_PASSWORD: app_password
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./src/database/migrations/001_create_smart_contract_table.sql:/docker-entrypoint-initdb.d/001_create_smart_contract_table.sql:ro
-      - ./src/database/migrations/002_create_transactions_table.sql:/docker-entrypoint-initdb.d/002_create_transactions_table.sql:ro
-
+      - type: bind
+        source: ./src/database/migrations/001_create_smart_contract_table.sql
+        target: /docker-entrypoint-initdb.d/001_create_smart_contract_table.sql
+        read_only: true
+      - type: bind
+        source: ./src/database/migrations/002_create_transactions_table.sql
+        target: /docker-entrypoint-initdb.d/002_create_transactions_table.sql
+        read_only: true
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
@@ -41,3 +47,4 @@ services:
 
 volumes:
   mysql_data:
+  localstack_data:

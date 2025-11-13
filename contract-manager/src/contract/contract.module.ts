@@ -5,9 +5,14 @@ import { ContractController } from './contract.controller';
 import { SmartContractEntity } from 'src/database/entities/smart-contract.entity';
 import { TransactionEntity } from 'src/database/entities/transaction.entity';
 import { AbiModule } from 'src/abi/abi.module';
+import { KmsModule } from 'src/kms/kms.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SmartContractEntity, TransactionEntity]), AbiModule],
+  imports: [
+    TypeOrmModule.forFeature([SmartContractEntity, TransactionEntity]),
+    AbiModule,
+    KmsModule,
+  ],
   providers: [ContractService],
   controllers: [ContractController],
 })

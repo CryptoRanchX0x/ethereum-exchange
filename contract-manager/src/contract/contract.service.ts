@@ -7,7 +7,8 @@ import { loadAbi } from 'src/utils/abi-loader';
 import { AbiService } from 'src/abi/abi.service';
 import { SmartContractEntity } from 'src/database/entities/smart-contract.entity';
 import { TransactionEntity, TransactionStatus } from 'src/database/entities/transaction.entity';
-
+import { KmsService } from 'src/kms/kms.service';
+import { getSigner } from 'src/utils/getSigner';
 @Injectable()
 export class ContractService {
   private readonly provider: ethers.JsonRpcProvider;
@@ -18,21 +19,13 @@ export class ContractService {
     @InjectRepository(TransactionEntity)
     private readonly transactionRepository: Repository<TransactionEntity>,
     private readonly abiService: AbiService,
+    private readonly kmsService: KmsService,
   ) {
-    const rpcUrl = process.env.SEPOLIA_RPC_URL;
+    const rpcUrl = process.env.RPC_URL;
     if (!rpcUrl) {
-      throw new Error('SEPOLIA_RPC_URL environment variable is required');
+      throw new Error('RPC_URL environment variable is required');
     }
     this.provider = new ethers.JsonRpcProvider(rpcUrl);
-  }
-
-  getSigner(): ethers.Wallet {
-    const privateKey = process.env.PRIVATE_KEY;
-    if (!privateKey) {
-      throw new Error('PRIVATE_KEY not defined in .env');
-    }
-
-    return new ethers.Wallet(privateKey, this.provider);
   }
 
   async callFunction(
@@ -90,7 +83,6 @@ export class ContractService {
     const result = await this.getContractByName(contractName, contractAddress, this.provider);
     contract = result.contract;
 
-    // Criar registro da transação com status ENVIADA
     const transactionId = uuidv4();
 
     try {
@@ -100,24 +92,14 @@ export class ContractService {
 
       const txData = contract.interface.encodeFunctionData(functionName, parameters);
 
-      let tx = {
-        from: await this.getSigner().getAddress(),
+      const unsignedTx = {
         to: contractAddress,
         data: txData,
-        value: 0,
-        chainId: (await this.provider.getNetwork()).chainId,
-        gasLimit: 100000n,
-        gasPrice: ethers.parseUnits("15", "gwei"),
-        nonce: 0
+        value: 0n,
+        gasLimit: 300000n,
       };
 
-      tx.nonce = await this.provider.getTransactionCount(await this.getSigner().getAddress());
-
-      const signedTx = await this.getSigner().signTransaction(tx);
-      const transaction = Transaction.from(signedTx);
-
-      const txResponse = await this.getSigner().sendTransaction(transaction);
-      console.log('[callFunctionWrite] txHash:', txResponse.hash);
+      const txResponse = await this.signAndBroadcastTransaction(unsignedTx, 'callFunctionWrite');
 
       // Salvar transação no banco com status ENVIADA
       const txEntity = this.transactionRepository.create({
@@ -131,12 +113,70 @@ export class ContractService {
       await this.transactionRepository.save(txEntity);
       console.log('[callFunctionWrite] Transaction saved to DB:', txEntity.id);
 
-      return {tx_hash: txResponse.hash, transactionId, status: txEntity.status};
-
+      return { tx_hash: txResponse.hash, transactionId, status: txEntity.status };
 
     } catch (error: any) {
       throw new BadRequestException(`Error calling function ${functionName} and parameters ${JSON.stringify(parameters)}: ${error?.message || error}`);
     }
+  }
+
+  /**
+   * Centraliza assinatura e broadcast de transações
+   */
+  private async signAndBroadcastTransaction(
+    unsignedTx: any,
+    context: string,
+  ): Promise<ethers.TransactionResponse> {
+    const signer = getSigner(this.kmsService, this.provider);
+    const fromAddress = await signer.getAddress();
+
+    // Preenche campos obrigatórios
+    const network = await this.provider.getNetwork();
+    unsignedTx.chainId = unsignedTx.chainId ?? network.chainId;
+    unsignedTx.nonce = unsignedTx.nonce ?? await this.provider.getTransactionCount(fromAddress, 'pending');
+
+    // Preenche fee data se não fornecido
+    if (!unsignedTx.gasPrice && !unsignedTx.maxFeePerGas) {
+      try {
+        const feeData = await this.provider.getFeeData();
+        if (feeData.maxFeePerGas) {
+          unsignedTx.maxFeePerGas = feeData.maxFeePerGas;
+          unsignedTx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? ethers.parseUnits('2', 'gwei');
+          unsignedTx.type = 2; // EIP-1559
+        } else {
+          unsignedTx.gasPrice = feeData.gasPrice;
+          unsignedTx.type = 0; // Legacy
+        }
+      } catch (e) {
+        console.warn(`[${context}] fee data retrieval failed:`, (e as any).message);
+        unsignedTx.gasPrice = ethers.parseUnits("15", "gwei");
+        unsignedTx.type = 0;
+      }
+    }
+
+    // Estima gas se não fornecido (apenas para deploy)
+    if (!unsignedTx.gasLimit && context === 'deploy') {
+      try {
+        const est = await this.provider.estimateGas(unsignedTx);
+        unsignedTx.gasLimit = (est * 110n) / 100n;
+      } catch (e) {
+        console.warn(`[${context}] gas estimate failed:`, (e as any).message);
+        unsignedTx.gasLimit = 3000000n;
+      }
+    }
+
+    console.log(`[${context}] Transaction to sign:`, {
+      to: unsignedTx.to,
+      dataLength: unsignedTx.data?.length || 0,
+      gasLimit: unsignedTx.gasLimit?.toString(),
+      nonce: unsignedTx.nonce,
+    });
+
+    const signedTx = await signer.signTransaction(unsignedTx);
+    const txResponse = await this.provider.broadcastTransaction(signedTx);
+    
+    console.log(`[${context}] txHash:`, txResponse.hash);
+    return txResponse;
   }
 
   /**
@@ -198,7 +238,7 @@ export class ContractService {
     }
 
 
-    let abi: any = artifact.abi.abi; // fallback
+    let abi: any = artifact.abi.abi;
     let bytecode: string | undefined = artifact.abi?.bytecode;
     if (typeof abi === 'string') {
       abi = JSON.parse(abi);
@@ -208,7 +248,7 @@ export class ContractService {
       throw new BadRequestException('No deployable bytecode found in the stored artifact. Make sure you uploaded the full compilation artifact that includes "bytecode".');
     }
 
-    const signer = this.getSigner();
+    const signer = getSigner(this.kmsService, this.provider);
 
     try {
       const factory = new ethers.ContractFactory(abi, bytecode, signer as any);
@@ -224,51 +264,8 @@ export class ContractService {
       // getDeployTransaction returns a TransactionRequest-like object with `data` and `value`
       const unsignedTx: any = await factory.getDeployTransaction(...deployArgs);
 
-      // Ensure `from` is set so provider estimates use correct sender
-      const fromAddress = await signer.getAddress();
-      unsignedTx.from = unsignedTx.from ?? fromAddress;
-
-      // Get network chainId and populate transaction fields
-      const network = await this.provider.getNetwork();
-      unsignedTx.chainId = network.chainId;
-
-      // Estimate gas if not provided
-      if (!unsignedTx.gasLimit && !unsignedTx.gas) {
-        try {
-          const est = await this.provider.estimateGas(unsignedTx);
-          // add a small buffer
-          unsignedTx.gasLimit = (est * 110n) / 100n;
-        } catch (e) {
-          console.warn('[deploy] gas estimate failed:', (e as any).message);
-        }
-      }
-
-      // Fill fee fields if missing (EIP-1559)
-      try {
-        const feeData = await this.provider.getFeeData();
-        if (!unsignedTx.maxFeePerGas && feeData.maxFeePerGas) unsignedTx.maxFeePerGas = feeData.maxFeePerGas;
-        if (!unsignedTx.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas) unsignedTx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
-        if (!unsignedTx.gasPrice && feeData.gasPrice) unsignedTx.gasPrice = feeData.gasPrice;
-      } catch (e) {
-        console.warn('[deploy] fee data retrieval failed:', (e as any).message);
-      }
-
-      // Set nonce if not present
-      if (unsignedTx.nonce === undefined) {
-        try {
-          const nonce = await this.provider.getTransactionCount(fromAddress, 'pending');
-          unsignedTx.nonce = nonce;
-        } catch (e) {
-          console.warn('[deploy] nonce retrieval failed:', (e as any).message);
-        }
-      }
-
-      const signedTx = await this.getSigner().signTransaction(unsignedTx);
-
-      const tx = Transaction.from(signedTx);
-
-      const txResponse = await this.getSigner().sendTransaction(tx);
-      console.log('[deploy] txHash:', txResponse.hash);
+      // Use centralized method for signing and broadcasting
+      const txResponse = await this.signAndBroadcastTransaction(unsignedTx, 'deploy');
 
       const receipt = await txResponse.wait();
 
@@ -299,6 +296,7 @@ export class ContractService {
         receipt,
       };
     } catch (err: any) {
+      console.error(`Failed to deploy contract "${abiName}":`, err);
       throw new BadRequestException(`Failed to deploy contract "${abiName}": ${err?.message ?? err}`);
     }
   }
