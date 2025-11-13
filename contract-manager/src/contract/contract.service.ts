@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { loadAbi } from 'src/utils/abi-loader';
 import { AbiService } from 'src/abi/abi.service';
 import { SmartContractEntity } from 'src/database/entities/smart-contract.entity';
+import { TransactionEntity, TransactionStatus } from 'src/database/entities/transaction.entity';
 
 @Injectable()
 export class ContractService {
@@ -14,6 +15,8 @@ export class ContractService {
   constructor(
     @InjectRepository(SmartContractEntity)
     private readonly smartContractRepository: Repository<SmartContractEntity>,
+    @InjectRepository(TransactionEntity)
+    private readonly transactionRepository: Repository<TransactionEntity>,
     private readonly abiService: AbiService,
   ) {
     const rpcUrl = process.env.SEPOLIA_RPC_URL;
@@ -39,7 +42,6 @@ export class ContractService {
     parameters: any[] = [],
   ): Promise<any> {
     let contract: ethers.Contract;
-    // lookup by name in DB -> get address and abi id, then fetch abi from Dynamo
     const result = await this.getContractByName(contractName, contractAddress, this.provider);
     contract = result.contract;
 
@@ -78,6 +80,65 @@ export class ContractService {
     }
   }
 
+  async callFunctionWrite(
+    contractName: string,
+    contractAddress: string,
+    functionName: string,
+    parameters: any[] = [],
+  ): Promise<any> {
+    let contract: ethers.Contract;
+    const result = await this.getContractByName(contractName, contractAddress, this.provider);
+    contract = result.contract;
+
+    // Criar registro da transação com status ENVIADA
+    const transactionId = uuidv4();
+
+    try {
+      if (typeof contract[functionName] !== 'function') {
+        throw new BadRequestException(`Function ${functionName} does not exist in contract`);
+      }
+
+      const txData = contract.interface.encodeFunctionData(functionName, parameters);
+
+      let tx = {
+        from: await this.getSigner().getAddress(),
+        to: contractAddress,
+        data: txData,
+        value: 0,
+        chainId: (await this.provider.getNetwork()).chainId,
+        gasLimit: 100000n,
+        gasPrice: ethers.parseUnits("15", "gwei"),
+        nonce: 0
+      };
+
+      tx.nonce = await this.provider.getTransactionCount(await this.getSigner().getAddress());
+
+      const signedTx = await this.getSigner().signTransaction(tx);
+      const transaction = Transaction.from(signedTx);
+
+      const txResponse = await this.getSigner().sendTransaction(transaction);
+      console.log('[callFunctionWrite] txHash:', txResponse.hash);
+
+      // Salvar transação no banco com status ENVIADA
+      const txEntity = this.transactionRepository.create({
+        id: transactionId,
+        id_smart_contract: result.smartContractId,
+        tx_hash: txResponse.hash,
+        status: TransactionStatus.ENVIADA,
+        function_name: functionName,
+      });
+
+      await this.transactionRepository.save(txEntity);
+      console.log('[callFunctionWrite] Transaction saved to DB:', txEntity.id);
+
+      return {tx_hash: txResponse.hash, transactionId, status: txEntity.status};
+
+
+    } catch (error: any) {
+      throw new BadRequestException(`Error calling function ${functionName} and parameters ${JSON.stringify(parameters)}: ${error?.message || error}`);
+    }
+  }
+
   /**
    * Fetch a deployed contract by its logical `name` stored in MySQL.
    * Returns the ethers.Contract instance along with address and abiId.
@@ -86,13 +147,13 @@ export class ContractService {
     name: string,
     address: string,
     signerOrProvider?: ethers.Signer | ethers.Provider,
-  ): Promise<{ contract: ethers.Contract; address: string; abiId: string }> {
-    const smart = await this.smartContractRepository.findOne({ where: { name, address } as any });
-    if (!smart) {
-      throw new NotFoundException(`Smart contract with name "${name}" not found`);
+  ): Promise<{ contract: ethers.Contract; address: string; abiId: string; smartContractId: string }> {
+    const contractData = await this.smartContractRepository.findOne({ where: { name, address } as any });
+    if (!contractData) {
+      throw new NotFoundException(`Smart contract with name "${name}" and address "${address}" not found`);
     }
 
-    const abiId = smart.id_abi;
+    const abiId = contractData.id_abi;
 
     const abiItem = await this.abiService.getAbiById(abiId);
     if (!abiItem) {
@@ -103,7 +164,7 @@ export class ContractService {
     const providerOrSigner = signerOrProvider ?? this.provider;
 
     const contract = new ethers.Contract(address, abi, providerOrSigner as any);
-    return { contract, address, abiId };
+    return { contract, address, abiId, smartContractId: contractData.id };
   }
 
   /**
@@ -129,9 +190,6 @@ export class ContractService {
       throw new BadRequestException(`No ABI/artifact found for "${abiName}"`);
     }
 
-    console.log('[deploy] artifact keys:', Object.keys(artifact));
-    console.log('[deploy] artifact.abi type:', typeof artifact.abi, 'isArray:', Array.isArray(artifact.abi));
-
     // If artifact is just an ABI array, we cannot deploy (no bytecode)
     if (Array.isArray(artifact.abi)) {
       throw new BadRequestException(
@@ -139,29 +197,17 @@ export class ContractService {
       );
     }
 
-    // Try to extract abi and bytecode from common artifact shapes:
-    //  - Hardhat artifact: { abi: [...], bytecode: "0x...", deployedBytecode: "0x...", ... }
-    //  - solc-json output artifact: { abi: [...], evm: { bytecode: { object: "..." } } }
-    let abi: any = artifact.abi.abi ?? artifact.abi ?? artifact; // fallback
-    let bytecode: string | undefined = artifact.bytecode ?? artifact.abi?.bytecode ?? (artifact.abi?.evm && artifact.abi.evm.bytecode && artifact.abi.evm.bytecode.object);
 
-    console.log('[deploy] extracted abi type:', typeof abi, 'isArray:', Array.isArray(abi));
-    console.log('[deploy] extracted bytecode:', bytecode ? `length=${bytecode.length}, starts=${bytecode.slice(0, 20)}...` : 'undefined');
-
-    // If artifact.abi might be a string (if stored differently), parse it
+    let abi: any = artifact.abi.abi; // fallback
+    let bytecode: string | undefined = artifact.abi?.bytecode;
     if (typeof abi === 'string') {
-      try {
-        abi = JSON.parse(abi);
-      } catch {
-        // keep as-is if not JSON
-      }
+      abi = JSON.parse(abi);
     }
 
     if (!bytecode || bytecode === '0x' || bytecode.length === 0) {
       throw new BadRequestException('No deployable bytecode found in the stored artifact. Make sure you uploaded the full compilation artifact that includes "bytecode".');
     }
 
-    // Create signer and factory
     const signer = this.getSigner();
 
     try {
@@ -217,24 +263,14 @@ export class ContractService {
         }
       }
 
-      // Log unsigned transaction
-      //console.log('[deploy] unsignedTx:', JSON.stringify(unsignedTx, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2));
-      //console.log('[deploy] unsignedTx.data length:', unsignedTx.data ? unsignedTx.data.length);
-
-
-      // Sign the transaction (returns serialized/raw tx)
       const signedTx = await this.getSigner().signTransaction(unsignedTx);
-      //console.log('[deploy] signedTx length:', signedTx ? signedTx.length : 'null');
 
       const tx = Transaction.from(signedTx);
 
-      // Send raw transaction
       const txResponse = await this.getSigner().sendTransaction(tx);
       console.log('[deploy] txHash:', txResponse.hash);
 
-      // Wait for the transaction to be mined
       const receipt = await txResponse.wait();
-      console.log('[deploy] receipt:', JSON.stringify(receipt, null, 2));
 
       const address = receipt?.contractAddress!!;
 

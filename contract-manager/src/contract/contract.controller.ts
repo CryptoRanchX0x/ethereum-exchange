@@ -1,6 +1,5 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { ContractService } from './contract.service';
-import { loadAbi } from 'src/utils/abi-loader';
 
 @Controller('contract')
 export class ContractController {
@@ -18,6 +17,26 @@ export class ContractController {
     );
 
     return { contract: contract_name, function: function_name, result: result.toString() };
+  }
+
+    @Post('call-function-write')
+  async callFunctionWrite(@Body() body: any) {
+    const { contract_name, contract_address, function_name, parameters = [] } = body;
+
+    const result = await this.contractService.callFunctionWrite(
+      contract_name,
+      contract_address,
+      function_name,
+      parameters,
+    );
+
+    return {
+      contract: contract_name,
+      function: function_name,
+      transactionId: result.transactionId,
+      txHash: result.tx_hash,
+      status: result.status
+    };
   }
 
   /**

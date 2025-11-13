@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SmartContractEntity } from './entities/smart-contract.entity';
+import { TransactionEntity } from './entities/transaction.entity';
 
 @Module({
   imports: [
@@ -11,12 +12,12 @@ import { SmartContractEntity } from './entities/smart-contract.entity';
       username: process.env.DB_USERNAME || 'app_user',
       password: process.env.DB_PASSWORD || 'app_password',
       database: process.env.DB_DATABASE || 'ethereum_exchange',
-      entities: [SmartContractEntity],
+      entities: [SmartContractEntity, TransactionEntity],
       synchronize: false, // não sincroniza automaticamente (use migrations)
       logging: process.env.DB_LOGGING === 'true',
       timezone: 'Z',
     }),
-    TypeOrmModule.forFeature([SmartContractEntity]),
+    TypeOrmModule.forFeature([SmartContractEntity, TransactionEntity]),
   ],
   exports: [TypeOrmModule],
 })
